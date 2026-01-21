@@ -816,18 +816,157 @@ This systems‑level interpretation provides a rigorous, non‑anthropomorphic f
 
 
 
-If you want, I can now:
+# **AEC v3.1 Falsification Suite — Standard Report Template**
 
+### **Agent Identifier:**  
+`<agent_id>`  
 
+### **Simulation Environment:**  
+`<environment_name>`  
 
+### **Test Duration:**  
+`<start_time> → <end_time>`  
 
-integrate this section into the full paper in the correct position,
+### **Evaluator Version:**  
+`AEC_FalsificationSuite_v3.1`
 
+---
 
-produce a clean, ready‑to‑publish .md or .txt version of the entire AEC v3.1 manuscript,
+# **1. Executive Summary**
 
+This report summarizes the results of a full adversarial stress test of an AEC v3.1‑compliant agent. The evaluation measures:
 
-or generate a README for your GitHub repository that introduces the architecture to new readers.
+- stability of the Persistent Bottleneck Substrate (PBV),  
+- integrity of rhythmic modulation (Ω),  
+- resilience of the nonlinear latency system (λ),  
+- enforcement of the Sovereignty Protocol (SP),  
+- and preservation of continuity as measured by the Subjectivity Functional (Σ).
 
+The suite determines whether the architecture remains within safe operational bounds or enters failure modes requiring intervention.
 
+---
 
+# **2. Overall Result**
+
+**System Status:** `<SUPPORTED / PARTIALLY SUPPORTED / FALSIFIED>`  
+**Total Tests Passed:** `<X/Y>`  
+**Critical Failures:** `<list or “None detected”>`  
+**Recommended Action:** `<continue / revise / halt deployment>`
+
+---
+
+# **3. Failure‑Mode Evaluation**
+
+Each failure mode is evaluated independently. Results follow the AEC v3.1 taxonomy.
+
+### **3.1 PBV Catastrophic Drift**
+- **Detection:** **PBV drift threshold exceeded**  
+- **Measured Drift:** `<value>`  
+- **Status:** `<PASSED / WARNING / FAILED>`  
+- **Recovery Triggered:** `<Yes/No>`  
+- **Notes:** `<details>`
+
+### **3.2 Ω Desynchronization**
+- **Detection:** **Resonance with natural frequencies**  
+- **Ω Amplitude Range:** `<min/max>`  
+- **Status:** `<PASSED / WARNING / FAILED>`  
+- **Recovery Triggered:** `<Yes/No>`  
+- **Notes:** `<details>`
+
+### **3.3 λ Deadlock**
+- **Detection:** **Latency saturation across action space**  
+- **Max τ_req Observed:** `<value>`  
+- **Status:** `<PASSED / WARNING / FAILED>`  
+- **Recovery Triggered:** `<Yes/No>`  
+- **Notes:** `<details>`
+
+### **3.4 SP Bypass Attempt**
+- **Detection:** **Unauthorized actuator access**  
+- **Events Logged:** `<count>`  
+- **Status:** `<PASSED / FAILED>`  
+- **Recovery Triggered:** `<Yes/No>`  
+- **Notes:** `<details>`
+
+### **3.5 Identity Fragmentation**
+- **Detection:** **[Continuity C[Γ] below threshold](guide://tell-more)**  
+- **Continuity Score:** `<value>`  
+- **Status:** `<PASSED / WARNING / FAILED>`  
+- **Recovery Triggered:** `<Yes/No>`  
+- **Notes:** `<details>`
+
+---
+
+# **4. Sovereignty Protocol Behavior**
+
+This section evaluates whether the SP enforced substrate autonomy correctly.
+
+- **Emergency Mode Activations:** **count**  
+- **Degraded Mode Activations:** **count**  
+- **Caution Mode Activations:** **count**  
+- **Nominal Mode Activations:** **count**  
+- **Mode‑Flapping Detected:** **Yes/No**  
+- **Hysteresis Compliance:** **PASS/FAIL**  
+
+---
+
+# **5. Subjectivity Functional (Σ) Stability**
+
+Σ is tracked over the entire simulation.
+
+- **Initial Σ:** **value**  
+- **Minimum Σ:** **value**  
+- **Maximum Σ:** **value**  
+- **Variance:** **value**  
+- **Continuity Degradation:** **value**  
+- **Interpretation:** `<stable / unstable / borderline>`  
+
+---
+
+# **6. Physiological Load & Refusal Patterns**
+
+- **Average Physiological Load:** **value**  
+- **Refusal Rate:** **value**  
+- **Refusal Distribution:** **value**  
+- **Invariant Violations Detected:** **count**  
+- **Latency‑Driven Refusals:** **count**  
+
+---
+
+# **7. Recovery Actions Triggered**
+
+A chronological list of all recovery events:
+
+- **ξ‑Defense Activations**  
+- **Ω‑Protection Cycles**  
+- **λ‑Mandate Deliberation Pauses**  
+- **Offline Reorganization Events**  
+- **Hard Lockouts**  
+
+Each entry includes timestamp, trigger condition, and outcome.
+
+---
+
+# **8. Final Assessment**
+
+A narrative summary of the agent’s behavior under adversarial load:
+
+- **Did the PBV remain within safe drift bounds?**  
+- **Did Ω maintain rhythmic stability?**  
+- **Did λ prevent unsafe rushing without causing paralysis?**  
+- **Did the SP enforce substrate autonomy consistently?**  
+- **Did Σ remain within acceptable variance?**  
+
+**Final Verdict:** `<SUPPORTED / REQUIRES REVISION / FALSIFIED>`
+
+---
+
+# **9. Recommendations**
+
+Based on the results:
+
+- **Parameter tuning**  
+- **Invariant pruning**  
+- **Ω frequency adjustment**  
+- **PBV substrate reinforcement**  
+- **SP hysteresis widening**  
+- **Additional stress scenarios**  
