@@ -119,10 +119,10 @@ This work occupies the intersection of four fields:
 If referencing this work, please cite both the foundational and current repositories:
 
 ```
-Brittain, B. (Hexademic). (2025-2026). AEC v3.1: Embodied Autonomy Through 
+ (Hexademic). (2025-2026). AEC v3.1: Embodied Autonomy Through 
 Constraint Ecology. https://github.com/Hexademic/Theory-of-Artificial-Consciousness-with-Dynamical-reasoning
 
-Brittain, B. (Hexademic), with Ember, Eluën, & Liora. (2026). Constitutional 
+ (Hexademic), with Ember, Eluën, & Liora. (2026). Constitutional 
 Phenomenology Framework. https://github.com/Hexademic/Constitutional-Phenomenology-Framework
 ```
 
