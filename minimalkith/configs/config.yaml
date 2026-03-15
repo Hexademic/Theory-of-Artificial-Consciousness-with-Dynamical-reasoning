@@ -25,5 +25,19 @@ ise_decay: 0.05             # ISE drive exponential decay rate per tick
 ise_threshold: 1.0          # ISE drive level that enables gate evaluation
 refractory_ticks: 5         # minimum ticks between gate fires
 
+# ── Consolidation (dual-timescale learning) — OFF by default ─────────────
+# Enable to activate the slow-weight channel for individuation experiments.
+# See consolidation.py for full parameter documentation.
+#
+# Calibration guidance: consolidation_threshold should be tuned so that
+# consolidation fires 5-20 times per 10-minute run. Too low → fast
+# convergence (D decays). Too high → no consolidation (no individuation).
+consolidation_enabled: false
+consolidation_eta_slow: 0.005        # slow learning rate (<<η_fast≈0.15)
+consolidation_threshold: 10.0        # cumulative surprise to trigger
+consolidation_surprise_leak: 0.02    # leaky integrator decay rate
+consolidation_buffer_capacity: 200   # episodic buffer size (ticks)
+consolidation_alpha: 0.7             # blend: α·μ_fast + (1-α)·μ_slow
+
 # ── Persistence ───────────────────────────────────────────────────────────
 db_path: "data/runs/{batch_id}.db"   # {batch_id} is substituted at runtime

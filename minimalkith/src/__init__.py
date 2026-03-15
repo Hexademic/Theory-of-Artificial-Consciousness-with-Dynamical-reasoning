@@ -41,6 +41,10 @@ from .core import (
 from .environment import Environment, EnvironmentConfig
 from .interoception import InteroceptiveLoop, InteroceptiveState
 from .persistence import Database
+from .consolidation import (
+    SlowWeightChannel, DualTimescalePredictor,
+    EpisodicBuffer, ConsolidationEvent,
+)
 from .harness import (
     HarnessConfig, PairedBatchConfig,
     run_single, run_batch,
@@ -68,6 +72,9 @@ __all__ = [
     "InteroceptiveLoop", "InteroceptiveState",
     # persistence
     "Database",
+    # consolidation
+    "SlowWeightChannel", "DualTimescalePredictor",
+    "EpisodicBuffer", "ConsolidationEvent",
     # harness
     "HarnessConfig", "PairedBatchConfig",
     "run_single", "run_batch",

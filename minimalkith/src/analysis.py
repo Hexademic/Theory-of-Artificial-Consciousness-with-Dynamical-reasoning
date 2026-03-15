@@ -495,6 +495,7 @@ def counterfactual_divergence(
     dtw_weight:    float = 0.5,
     jaccard_weight: float = 0.5,
     n_shuffle:     int   = 1000,
+    n_time_windows: int  = 5,
 ) -> Dict:
     """
     Measure behavioural divergence D between counterfactual pair members.
@@ -513,114 +514,145 @@ def counterfactual_divergence(
 
     n_shuffle : permutations for the null distribution (shuffle pairs).
 
+    n_time_windows : split each trace into this many equal windows and
+        compute D per window.  This produces D(t) — a time series that
+        distinguishes initial-condition sensitivity (D decays) from true
+        individuation (D persists or grows at long horizons).
+
     Returns
     -------
     dict with:
-        values        — per-pair D scores
-        median_D      — median D across pairs
+        values        — per-pair D scores (full trace)
+        D_by_window   — (n_pairs, n_time_windows) array of windowed D
+        median_D      — median D across pairs (full trace)
         null_95th     — 95th percentile of shuffled null D
-        effect_size_d — Cohen's d (pairs vs null)
+        cohens_d      — Cohen's d (pairs vs null)
         individuating — bool (median_D > null_95th and d > 0.5)
-        plot          — Figure
+        tail_persists — bool: median D in last window > null_95th
+                        (distinguishes individuation from IC sensitivity)
+        plot          — Figure (full D + D(t) decay plot)
         json          — serialisable summary
     """
     if not pairs:
         return {"values": [], "plot": None,
                 "json": {"error": "no_pairs"}}
 
-    pair_D: List[float] = []
+    def _pair_D(act_a, act_b, gate_a, gate_b) -> float:
+        cap = 3000
+        if len(act_a) > cap:
+            step   = len(act_a) // cap
+            act_a  = act_a[::step];  act_b  = act_b[::step]
+            gate_a = gate_a[::step]; gate_b = gate_b[::step]
+        return (dtw_weight  * _dtw_distance(act_a, act_b)
+                + jaccard_weight * _jaccard_binary(gate_a, gate_b))
+
+    pair_D:      List[float]      = []
+    D_by_window: List[List[float]] = []   # (n_pairs, n_time_windows)
+
     for p in pairs:
         act_a  = np.asarray(p["actuator_a"], dtype=float)
         act_b  = np.asarray(p["actuator_b"], dtype=float)
         gate_a = np.asarray(p["gate_a"],     dtype=float)
         gate_b = np.asarray(p["gate_b"],     dtype=float)
 
-        # Downsample long traces for DTW tractability (cap at 3000 pts)
-        cap = 3000
-        if len(act_a) > cap:
-            step  = len(act_a) // cap
-            act_a  = act_a[::step]
-            act_b  = act_b[::step]
-            gate_a = gate_a[::step]
-            gate_b = gate_b[::step]
+        pair_D.append(_pair_D(act_a, act_b, gate_a, gate_b))
 
-        d_dtw    = _dtw_distance(act_a, act_b)
-        d_jac    = _jaccard_binary(gate_a, gate_b)
-        D        = dtw_weight * d_dtw + jaccard_weight * d_jac
-        pair_D.append(D)
+        # D(t): compute per time window
+        T       = min(len(act_a), len(act_b))
+        wsize   = max(1, T // n_time_windows)
+        w_D     = []
+        for w in range(n_time_windows):
+            s = w * wsize
+            e = s + wsize if w < n_time_windows - 1 else T
+            w_D.append(_pair_D(act_a[s:e], act_b[s:e],
+                                gate_a[s:e], gate_b[s:e]))
+        D_by_window.append(w_D)
 
-    pair_D_arr = np.array(pair_D)
+    pair_D_arr   = np.array(pair_D)
+    D_win_arr    = np.array(D_by_window)          # (n_pairs, n_time_windows)
+    median_D_win = np.median(D_win_arr, axis=0)   # (n_time_windows,)
 
-    # Null distribution: shuffle which trace is "A" and which is "B"
-    # across all pairs, then recompute D.
+    # Null distribution: shuffle A/B labels across pairs
     rng = np.random.default_rng(42)
     null_D: List[float] = []
     for _ in range(n_shuffle):
-        shuffled = []
+        null_vals = []
         for p in pairs:
             if rng.random() > 0.5:
-                shuffled.append(
-                    {"actuator_a": p["actuator_b"], "actuator_b": p["actuator_a"],
-                     "gate_a": p["gate_b"], "gate_b": p["gate_a"]}
-                )
+                aa, ab = p["actuator_b"], p["actuator_a"]
+                ga, gb = p["gate_b"],     p["gate_a"]
             else:
-                shuffled.append(p)
-        # one null D per pair-set: just take the median of within-pair distances
-        null_vals = []
-        for p in shuffled:
-            act_a  = np.asarray(p["actuator_a"], dtype=float)
-            act_b  = np.asarray(p["actuator_b"], dtype=float)
-            gate_a = np.asarray(p["gate_a"],     dtype=float)
-            gate_b = np.asarray(p["gate_b"],     dtype=float)
-            cap = 3000
-            if len(act_a) > cap:
-                step = len(act_a) // cap
-                act_a  = act_a[::step];  act_b  = act_b[::step]
-                gate_a = gate_a[::step]; gate_b = gate_b[::step]
-            null_vals.append(
-                dtw_weight * _dtw_distance(act_a, act_b)
-                + jaccard_weight * _jaccard_binary(gate_a, gate_b)
-            )
+                aa, ab = p["actuator_a"], p["actuator_b"]
+                ga, gb = p["gate_a"],     p["gate_b"]
+            null_vals.append(_pair_D(
+                np.asarray(aa, dtype=float), np.asarray(ab, dtype=float),
+                np.asarray(ga, dtype=float), np.asarray(gb, dtype=float),
+            ))
         null_D.append(float(np.median(null_vals)))
 
-    null_arr = np.array(null_D)
-    null_95  = float(np.percentile(null_arr, 95))
-    median_D = float(np.median(pair_D_arr))
+    null_arr  = np.array(null_D)
+    null_95   = float(np.percentile(null_arr, 95))
+    median_D  = float(np.median(pair_D_arr))
 
-    # Cohen's d: pair D vs null distribution
     pooled_std = math.sqrt(
         (pair_D_arr.var() + null_arr.var()) / 2.0 + 1e-12
     )
-    cohens_d = (pair_D_arr.mean() - null_arr.mean()) / pooled_std
+    cohens_d      = (pair_D_arr.mean() - null_arr.mean()) / pooled_std
     individuating = (median_D > null_95) and (cohens_d > 0.5)
+
+    # Tail persistence check: does D survive into the last time window?
+    tail_D       = float(median_D_win[-1]) if len(median_D_win) else 0.0
+    tail_persists = tail_D > null_95
 
     fig = None
     if MPL:
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.hist(null_D, bins=40, alpha=0.5, label="Null (shuffle)", density=True)
-        ax.axvline(null_95, color="orange", linestyle="--",
-                   label=f"Null 95th pct={null_95:.4f}")
-        ax.scatter(pair_D, [0.05] * len(pair_D), color="steelblue",
-                   zorder=5, label="Pair D scores", s=40)
-        ax.axvline(median_D, color="steelblue", linestyle="-",
-                   label=f"Median D={median_D:.4f}")
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+        # Panel 1: full-trace D distribution
+        axes[0].hist(null_D, bins=40, alpha=0.5, label="Null (shuffle)", density=True)
+        axes[0].axvline(null_95, color="orange", linestyle="--",
+                        label=f"Null 95th={null_95:.4f}")
+        axes[0].scatter(pair_D, [0.05] * len(pair_D), color="steelblue",
+                        zorder=5, label="Pair D", s=40)
+        axes[0].axvline(median_D, color="steelblue", linestyle="-",
+                        label=f"Median D={median_D:.4f}")
         verdict = "INDIVIDUATING" if individuating else "NOT INDIVIDUATING"
-        ax.set(xlabel="D (behavioural divergence)",
-               ylabel="Density",
-               title=f"Counterfactual divergence — {verdict}")
-        ax.legend()
+        axes[0].set(xlabel="D", ylabel="Density",
+                    title=f"Full-trace divergence — {verdict}")
+        axes[0].legend(fontsize=8)
+
+        # Panel 2: D(t) — median divergence per time window
+        window_labels = [f"W{i+1}" for i in range(n_time_windows)]
+        axes[1].plot(window_labels, median_D_win, marker="o",
+                     color="steelblue", label="Median D per window")
+        axes[1].axhline(null_95, color="orange", linestyle="--",
+                        label=f"Null 95th={null_95:.4f}")
+        axes[1].fill_between(range(n_time_windows),
+                              null_95, median_D_win,
+                              where=median_D_win > null_95,
+                              alpha=0.15, color="steelblue")
+        tail_lbl = "PERSISTS" if tail_persists else "DECAYS"
+        axes[1].set(xlabel="Time window", ylabel="Median D",
+                    title=f"D(t) — tail {tail_lbl}")
+        axes[1].set_xticks(range(n_time_windows))
+        axes[1].set_xticklabels(window_labels)
+        axes[1].legend(fontsize=8)
+
         fig.tight_layout()
 
     return {
-        "values":        pair_D,
-        "plot":          fig,
+        "values":       pair_D,
+        "D_by_window":  D_win_arr.tolist(),
+        "plot":         fig,
         "json": {
-            "n_pairs":       len(pairs),
-            "median_D":      median_D,
-            "null_95th":     null_95,
-            "cohens_d":      float(cohens_d),
-            "individuating": individuating,
-            "alpha":         ALPHA,
+            "n_pairs":        len(pairs),
+            "median_D":       median_D,
+            "null_95th":      null_95,
+            "cohens_d":       float(cohens_d),
+            "individuating":  individuating,
+            "tail_persists":  tail_persists,
+            "median_D_windows": median_D_win.tolist(),
+            "alpha":          ALPHA,
         },
     }
 

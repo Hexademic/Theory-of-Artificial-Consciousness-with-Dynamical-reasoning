@@ -52,6 +52,7 @@ from .core import (
 from .environment import Environment, EnvironmentConfig
 from .interoception import InteroceptiveLoop
 from .persistence import Database
+from .consolidation import SlowWeightChannel, DualTimescalePredictor
 
 logger = logging.getLogger("MK.Harness")
 
@@ -89,6 +90,16 @@ class HarnessConfig:
 
     # DB
     db_path:           str   = "data/runs/{batch_id}.db"
+
+    # Consolidation (dual-timescale learning) — OFF by default
+    # Set consolidation_enabled=True to activate the slow-weight channel.
+    # See consolidation.py for full parameter documentation.
+    consolidation_enabled:        bool  = False
+    consolidation_eta_slow:       float = 0.005   # slow learning rate
+    consolidation_threshold:      float = 10.0    # cumulative surprise to trigger
+    consolidation_surprise_leak:  float = 0.02    # leaky integrator decay
+    consolidation_buffer_capacity: int  = 200     # episodic buffer size
+    consolidation_alpha:          float = 0.7     # fast/slow blend (α·fast + (1-α)·slow)
 
     @classmethod
     def from_yaml(cls, path: str) -> "HarnessConfig":
@@ -140,8 +151,22 @@ def run_single(
     ise         = ISE(decay=config.ise_decay, gate_threshold=config.ise_threshold,
                      dt=1.0 / config.f_tick)
     gate        = RitualGate(refractory_ticks=config.refractory_ticks)
-    pred_model  = PredictiveModel(rng=rng)
-    actuator    = Actuator()
+
+    if config.consolidation_enabled:
+        slow_ch    = SlowWeightChannel(
+            eta_slow=config.consolidation_eta_slow,
+            consolidation_threshold=config.consolidation_threshold,
+            surprise_leak=config.consolidation_surprise_leak,
+            buffer_capacity=config.consolidation_buffer_capacity,
+        )
+        pred_model = DualTimescalePredictor(
+            rng=rng, alpha=config.consolidation_alpha, slow_channel=slow_ch,
+        )
+    else:
+        pred_model = PredictiveModel(rng=rng)
+        slow_ch    = None
+
+    actuator      = Actuator()
     proprioceptor = Proprioceptor()
 
     loop = InteroceptiveLoop(pred_model, ise, gate, connected=True)
@@ -215,6 +240,21 @@ def run_single(
                 "budget": metabolic.state.budget,
             })
 
+        # Slow-weight consolidation tick (no-op if disabled)
+        if slow_ch is not None:
+            consol = pred_model.tick_slow(
+                tick_id=t,
+                epsilon=is_state.epsilon,
+                ise_drive=ise.drive,
+                metabolic=metabolic.normalised,
+            )
+            if consol is not None:
+                db.write_event(tick_id, "CONSOLIDATION", {
+                    "index":     consol.index,
+                    "delta_slow": consol.delta_slow,
+                    "mu_slow":   pred_model.mu_slow,
+                })
+
         epsilon_history.append(is_state.epsilon)
         gate_history.append(is_state.gate_fired)
 
@@ -223,14 +263,16 @@ def run_single(
 
     db.commit()
 
+    n_consol = slow_ch.n_consolidations if slow_ch is not None else 0
     return {
-        "run_id":     run_id,
-        "condition":  condition,
-        "seed":       seed,
-        "gate_fires": gate.fire_count,
-        "mean_eps":   float(np.mean(np.abs(epsilon_history))),
-        "max_eps":    float(np.max(np.abs(epsilon_history))),
-        "ticks":      n_ticks,
+        "run_id":          run_id,
+        "condition":       condition,
+        "seed":            seed,
+        "gate_fires":      gate.fire_count,
+        "mean_eps":        float(np.mean(np.abs(epsilon_history))),
+        "max_eps":         float(np.max(np.abs(epsilon_history))),
+        "ticks":           n_ticks,
+        "n_consolidations": n_consol,
     }
 
 
@@ -330,7 +372,21 @@ def run_single_split_seed(
     ise           = ISE(decay=config.ise_decay, gate_threshold=config.ise_threshold,
                        dt=1.0 / config.f_tick)
     gate          = RitualGate(refractory_ticks=config.refractory_ticks)
-    pred_model    = PredictiveModel(rng=int_rng)
+
+    if config.consolidation_enabled:
+        slow_ch    = SlowWeightChannel(
+            eta_slow=config.consolidation_eta_slow,
+            consolidation_threshold=config.consolidation_threshold,
+            surprise_leak=config.consolidation_surprise_leak,
+            buffer_capacity=config.consolidation_buffer_capacity,
+        )
+        pred_model = DualTimescalePredictor(
+            rng=int_rng, alpha=config.consolidation_alpha, slow_channel=slow_ch,
+        )
+    else:
+        pred_model = PredictiveModel(rng=int_rng)
+        slow_ch    = None
+
     actuator      = Actuator()
     proprioceptor = Proprioceptor()
 
@@ -406,6 +462,21 @@ def run_single_split_seed(
                 "budget": metabolic.state.budget,
             })
 
+        # Slow-weight consolidation tick (no-op if disabled)
+        if slow_ch is not None:
+            consol = pred_model.tick_slow(
+                tick_id=t,
+                epsilon=is_state.epsilon,
+                ise_drive=ise.drive,
+                metabolic=metabolic.normalised,
+            )
+            if consol is not None:
+                db.write_event(tick_id, "CONSOLIDATION", {
+                    "index":      consol.index,
+                    "delta_slow": consol.delta_slow,
+                    "mu_slow":    pred_model.mu_slow,
+                })
+
         epsilon_history.append(is_state.epsilon)
         gate_history.append(is_state.gate_fired)
 
@@ -414,15 +485,17 @@ def run_single_split_seed(
 
     db.commit()
 
+    n_consol = slow_ch.n_consolidations if slow_ch is not None else 0
     return {
-        "run_id":    run_id,
-        "condition": condition,
-        "seed_ext":  seed_ext,
-        "seed_int":  seed_int,
-        "gate_fires": gate.fire_count,
-        "mean_eps":  float(np.mean(np.abs(epsilon_history))),
-        "max_eps":   float(np.max(np.abs(epsilon_history))),
-        "ticks":     n_ticks,
+        "run_id":           run_id,
+        "condition":        condition,
+        "seed_ext":         seed_ext,
+        "seed_int":         seed_int,
+        "gate_fires":       gate.fire_count,
+        "mean_eps":         float(np.mean(np.abs(epsilon_history))),
+        "max_eps":          float(np.max(np.abs(epsilon_history))),
+        "ticks":            n_ticks,
+        "n_consolidations": n_consol,
     }
 
 

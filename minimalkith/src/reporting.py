@@ -477,6 +477,7 @@ class BatchReport:
                 f"<p><em>{jd['error']}</em></p></section>"
             )
         verdict = "✓ INDIVIDUATING" if jd.get("individuating") else "✗ NOT INDIVIDUATING"
+        tail    = "✓ PERSISTS" if jd.get("tail_persists") else "✗ DECAYS (IC sensitivity only)"
         fig_html = _embed_figure(d.get("plot"))
         return f"""
 <section>
@@ -486,8 +487,10 @@ class BatchReport:
    Null 95th pct: <strong>{jd.get('null_95th', 0):.4f}</strong> &nbsp;|&nbsp;
    Cohen's d: <strong>{jd.get('cohens_d', 0):.3f}</strong> &nbsp;|&nbsp;
    Verdict: <strong>{verdict}</strong></p>
-<p><em>D = weighted average of DTW distance (actuator) + Jaccard distance (gate raster).
-   Null from 1000 shuffled pairings.  Individuating if median D &gt; null 95th pct and d &gt; 0.5.</em></p>
+<p>Tail persistence (last window): <strong>{tail}</strong></p>
+<p><em>D = weighted DTW (actuator) + Jaccard (gate raster).  Null: 1000 shuffled pairings.
+   D(t) right panel distinguishes initial-condition sensitivity (decaying D) from
+   true individuation (non-decaying D at long horizons).</em></p>
 {fig_html}
 </section>"""
 
