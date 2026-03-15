@@ -32,6 +32,8 @@ from .analysis import (
     granger_test,
     pre_post_error_reduction,
     ablation_effect_size,
+    counterfactual_divergence,
+    observer_inference,
 )
 
 logger = logging.getLogger("MK.Reporting")
@@ -75,6 +77,9 @@ class BatchAnalysis:
     granger:      Optional[Dict] = None
     error_red:    Optional[Dict] = None
     ablation:     Optional[Dict] = None
+    # Individuation tests (paired batch)
+    cf_divergence:     Optional[Dict] = None
+    obs_inference:     Optional[Dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +192,64 @@ class BatchReport:
             }
             abla = ablation_effect_size(conn_metrics, abla_metrics)
 
+        # ── Paired-run analyses (if DB has paired runs) ──────────────────
+        cf_div  = None
+        obs_inf = None
+
+        # Detect paired runs by inspecting params JSON
+        paired_runs_by_id: Dict[int, Dict] = {}  # pair_id → {a: ..., b: ...}
+        observer_runs: List[Dict] = []
+
+        with Database(db_path) as db:
+            all_runs = db.fetch_runs()
+            for run in all_runs:
+                try:
+                    params = json.loads(run.get("params", "{}"))
+                except Exception:
+                    params = {}
+                if params.get("run_type") != "paired":
+                    continue
+                rid      = run["run_id"]
+                pair_id  = params.get("pair_id")
+                role     = params.get("pair_role", "?")
+                rows     = db.fetch_states(rid)
+                if not rows:
+                    continue
+                act_arr  = np.array([r.get("epsilon", 0) for r in rows])
+                gate_arr = np.array([r["gate_state"]     for r in rows])
+                paired_runs_by_id.setdefault(pair_id, {})
+                paired_runs_by_id[pair_id][role] = {
+                    "actuator": act_arr, "gate_state": gate_arr,
+                }
+
+        # Build pairs list for counterfactual_divergence
+        cf_pairs = []
+        for pid, members in sorted(paired_runs_by_id.items()):
+            if "A" in members and "B" in members:
+                cf_pairs.append({
+                    "pair_id":   pid,
+                    "actuator_a":  members["A"]["actuator"],
+                    "actuator_b":  members["B"]["actuator"],
+                    "gate_a":      members["A"]["gate_state"],
+                    "gate_b":      members["B"]["gate_state"],
+                })
+                # For observer inference: label A=0, B=1
+                observer_runs.append({
+                    "actuator":   members["A"]["actuator"],
+                    "gate_state": members["A"]["gate_state"],
+                    "label": 0,
+                })
+                observer_runs.append({
+                    "actuator":   members["B"]["actuator"],
+                    "gate_state": members["B"]["gate_state"],
+                    "label": 1,
+                })
+
+        if cf_pairs:
+            cf_div  = counterfactual_divergence(cf_pairs)
+        if len(observer_runs) >= 6:
+            obs_inf = observer_inference(observer_runs)
+
         analysis = BatchAnalysis(
             batch_id=batch_id,
             n_runs=len(summaries),
@@ -198,6 +261,8 @@ class BatchReport:
             granger=gran,
             error_red=err_r,
             ablation=abla,
+            cf_divergence=cf_div,
+            obs_inference=obs_inf,
         )
         return cls(analysis)
 
@@ -227,6 +292,8 @@ class BatchReport:
             self._section_granger(),
             self._section_error_reduction(),
             self._section_ablation(),
+            self._section_cf_divergence(),
+            self._section_obs_inference(),
         ]
         body = "\n".join(sections)
         return _HTML_TEMPLATE.format(
@@ -393,6 +460,70 @@ class BatchReport:
   {rows_html}
 </table>
 <p><em>* α = 0.01 (Mann-Whitney U)</em></p>
+{fig_html}
+</section>"""
+
+    def _section_cf_divergence(self) -> str:
+        d = self._analysis.cf_divergence
+        if d is None:
+            return (
+                "<section><h2>7. Counterfactual divergence</h2>"
+                "<p><em>No paired runs in this batch.</em></p></section>"
+            )
+        jd = d.get("json", {})
+        if "error" in jd:
+            return (
+                f"<section><h2>7. Counterfactual divergence</h2>"
+                f"<p><em>{jd['error']}</em></p></section>"
+            )
+        verdict = "✓ INDIVIDUATING" if jd.get("individuating") else "✗ NOT INDIVIDUATING"
+        fig_html = _embed_figure(d.get("plot"))
+        return f"""
+<section>
+<h2>7. Counterfactual divergence (history-sensitive individuation)</h2>
+<p>Pairs: <strong>{jd.get('n_pairs', '?')}</strong> &nbsp;|&nbsp;
+   Median D: <strong>{jd.get('median_D', 0):.4f}</strong> &nbsp;|&nbsp;
+   Null 95th pct: <strong>{jd.get('null_95th', 0):.4f}</strong> &nbsp;|&nbsp;
+   Cohen's d: <strong>{jd.get('cohens_d', 0):.3f}</strong> &nbsp;|&nbsp;
+   Verdict: <strong>{verdict}</strong></p>
+<p><em>D = weighted average of DTW distance (actuator) + Jaccard distance (gate raster).
+   Null from 1000 shuffled pairings.  Individuating if median D &gt; null 95th pct and d &gt; 0.5.</em></p>
+{fig_html}
+</section>"""
+
+    def _section_obs_inference(self) -> str:
+        d = self._analysis.obs_inference
+        if d is None:
+            return (
+                "<section><h2>8. Observer inference (public-private coupling)</h2>"
+                "<p><em>No paired runs or sklearn unavailable.</em></p></section>"
+            )
+        jd = d.get("json", {})
+        if "error" in jd:
+            return (
+                f"<section><h2>8. Observer inference</h2>"
+                f"<p><em>{jd['error']}</em></p></section>"
+            )
+        coupled = "✓ COUPLED" if jd.get("coupled") else "✗ NOT COUPLED"
+        fi = jd.get("importances", {})
+        fi_rows = "".join(
+            f"<tr><td>{k}</td><td>{v:.4f}</td></tr>"
+            for k, v in sorted(fi.items(), key=lambda x: -x[1])
+        )
+        fig_html = _embed_figure(d.get("plot"))
+        return f"""
+<section>
+<h2>8. Observer inference (public-private coupling)</h2>
+<p>Mean AUC: <strong>{jd.get('mean_auc', 0):.3f}</strong> &nbsp;|&nbsp;
+   Mean accuracy: <strong>{jd.get('mean_acc', 0):.3f}</strong> &nbsp;|&nbsp;
+   Runs: <strong>{jd.get('n_runs', '?')}</strong> &nbsp;|&nbsp;
+   Verdict: <strong>{coupled}</strong></p>
+<p><em>Random Forest classifier trained on per-run external features.
+   Coupled if AUC ≥ 0.8 on cross-validated held-out seeds.</em></p>
+<table>
+  <tr><th>Feature</th><th>Importance</th></tr>
+  {fi_rows}
+</table>
 {fig_html}
 </section>"""
 

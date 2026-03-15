@@ -41,7 +41,11 @@ from .core import (
 from .environment import Environment, EnvironmentConfig
 from .interoception import InteroceptiveLoop, InteroceptiveState
 from .persistence import Database
-from .harness import HarnessConfig, run_single, run_batch
+from .harness import (
+    HarnessConfig, PairedBatchConfig,
+    run_single, run_batch,
+    run_single_split_seed, run_paired_batch,
+)
 from .analysis import (
     compute_peri_event_histogram,
     lagged_cross_correlation,
@@ -49,6 +53,8 @@ from .analysis import (
     granger_test,
     pre_post_error_reduction,
     ablation_effect_size,
+    counterfactual_divergence,
+    observer_inference,
 )
 from .reporting import BatchReport, BatchAnalysis
 
@@ -63,7 +69,9 @@ __all__ = [
     # persistence
     "Database",
     # harness
-    "HarnessConfig", "run_single", "run_batch",
+    "HarnessConfig", "PairedBatchConfig",
+    "run_single", "run_batch",
+    "run_single_split_seed", "run_paired_batch",
     # analysis
     "compute_peri_event_histogram",
     "lagged_cross_correlation",
@@ -71,6 +79,8 @@ __all__ = [
     "granger_test",
     "pre_post_error_reduction",
     "ablation_effect_size",
+    "counterfactual_divergence",
+    "observer_inference",
     # reporting
     "BatchReport", "BatchAnalysis",
 ]

@@ -1,5 +1,5 @@
 """
-analysis.py — Six analysis functions for MinimalKith experiments.
+analysis.py — Eight analysis functions for MinimalKith experiments.
 
 All functions operate on numpy arrays loaded from the SQLite database.
 Each returns a dict containing:
@@ -8,6 +8,12 @@ Each returns a dict containing:
     "json"    — JSON-serialisable result object
 
 Significance threshold α = 0.01 throughout.
+
+Functions 1–6: causal battery (original).
+Function 7:   counterfactual_divergence — measures history-sensitive
+              behavioural individuation across paired runs.
+Function 8:   observer_inference — trains classifiers on external outputs
+              to predict internal state (public-private coupling test).
 """
 
 from __future__ import annotations
@@ -452,4 +458,321 @@ def ablation_effect_size(
         "plot":   fig,
         "json":   {k: {kk: vv for kk, vv in v.items() if kk != "significant" or True}
                    for k, v in results.items()},
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. Counterfactual divergence
+# ---------------------------------------------------------------------------
+
+def _dtw_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """
+    Minimal O(N²) DTW on 1-D sequences.  Returns the normalised path cost.
+    """
+    N, M = len(a), len(b)
+    D = np.full((N + 1, M + 1), np.inf)
+    D[0, 0] = 0.0
+    for i in range(1, N + 1):
+        for j in range(1, M + 1):
+            cost = abs(float(a[i - 1]) - float(b[j - 1]))
+            D[i, j] = cost + min(D[i - 1, j], D[i, j - 1], D[i - 1, j - 1])
+    return float(D[N, M]) / (N + M)
+
+
+def _jaccard_binary(a: np.ndarray, b: np.ndarray) -> float:
+    """Jaccard distance between two binary event rasters (1-D)."""
+    a = (a > 0).astype(bool)
+    b = (b > 0).astype(bool)
+    intersection = (a & b).sum()
+    union        = (a | b).sum()
+    if union == 0:
+        return 0.0
+    return 1.0 - float(intersection) / float(union)
+
+
+def counterfactual_divergence(
+    pairs: List[Dict],
+    dtw_weight:    float = 0.5,
+    jaccard_weight: float = 0.5,
+    n_shuffle:     int   = 1000,
+) -> Dict:
+    """
+    Measure behavioural divergence D between counterfactual pair members.
+
+    Parameters
+    ----------
+    pairs : list of dicts, each with keys:
+        "pair_id"
+        "actuator_a"  — (T,) float array for member A
+        "actuator_b"  — (T,) float array for member B
+        "gate_a"      — (T,) binary int array for member A
+        "gate_b"      — (T,) binary int array for member B
+
+    dtw_weight, jaccard_weight : weights for the combined D score.
+        Should sum to 1.
+
+    n_shuffle : permutations for the null distribution (shuffle pairs).
+
+    Returns
+    -------
+    dict with:
+        values        — per-pair D scores
+        median_D      — median D across pairs
+        null_95th     — 95th percentile of shuffled null D
+        effect_size_d — Cohen's d (pairs vs null)
+        individuating — bool (median_D > null_95th and d > 0.5)
+        plot          — Figure
+        json          — serialisable summary
+    """
+    if not pairs:
+        return {"values": [], "plot": None,
+                "json": {"error": "no_pairs"}}
+
+    pair_D: List[float] = []
+    for p in pairs:
+        act_a  = np.asarray(p["actuator_a"], dtype=float)
+        act_b  = np.asarray(p["actuator_b"], dtype=float)
+        gate_a = np.asarray(p["gate_a"],     dtype=float)
+        gate_b = np.asarray(p["gate_b"],     dtype=float)
+
+        # Downsample long traces for DTW tractability (cap at 3000 pts)
+        cap = 3000
+        if len(act_a) > cap:
+            step  = len(act_a) // cap
+            act_a  = act_a[::step]
+            act_b  = act_b[::step]
+            gate_a = gate_a[::step]
+            gate_b = gate_b[::step]
+
+        d_dtw    = _dtw_distance(act_a, act_b)
+        d_jac    = _jaccard_binary(gate_a, gate_b)
+        D        = dtw_weight * d_dtw + jaccard_weight * d_jac
+        pair_D.append(D)
+
+    pair_D_arr = np.array(pair_D)
+
+    # Null distribution: shuffle which trace is "A" and which is "B"
+    # across all pairs, then recompute D.
+    rng = np.random.default_rng(42)
+    null_D: List[float] = []
+    for _ in range(n_shuffle):
+        shuffled = []
+        for p in pairs:
+            if rng.random() > 0.5:
+                shuffled.append(
+                    {"actuator_a": p["actuator_b"], "actuator_b": p["actuator_a"],
+                     "gate_a": p["gate_b"], "gate_b": p["gate_a"]}
+                )
+            else:
+                shuffled.append(p)
+        # one null D per pair-set: just take the median of within-pair distances
+        null_vals = []
+        for p in shuffled:
+            act_a  = np.asarray(p["actuator_a"], dtype=float)
+            act_b  = np.asarray(p["actuator_b"], dtype=float)
+            gate_a = np.asarray(p["gate_a"],     dtype=float)
+            gate_b = np.asarray(p["gate_b"],     dtype=float)
+            cap = 3000
+            if len(act_a) > cap:
+                step = len(act_a) // cap
+                act_a  = act_a[::step];  act_b  = act_b[::step]
+                gate_a = gate_a[::step]; gate_b = gate_b[::step]
+            null_vals.append(
+                dtw_weight * _dtw_distance(act_a, act_b)
+                + jaccard_weight * _jaccard_binary(gate_a, gate_b)
+            )
+        null_D.append(float(np.median(null_vals)))
+
+    null_arr = np.array(null_D)
+    null_95  = float(np.percentile(null_arr, 95))
+    median_D = float(np.median(pair_D_arr))
+
+    # Cohen's d: pair D vs null distribution
+    pooled_std = math.sqrt(
+        (pair_D_arr.var() + null_arr.var()) / 2.0 + 1e-12
+    )
+    cohens_d = (pair_D_arr.mean() - null_arr.mean()) / pooled_std
+    individuating = (median_D > null_95) and (cohens_d > 0.5)
+
+    fig = None
+    if MPL:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.hist(null_D, bins=40, alpha=0.5, label="Null (shuffle)", density=True)
+        ax.axvline(null_95, color="orange", linestyle="--",
+                   label=f"Null 95th pct={null_95:.4f}")
+        ax.scatter(pair_D, [0.05] * len(pair_D), color="steelblue",
+                   zorder=5, label="Pair D scores", s=40)
+        ax.axvline(median_D, color="steelblue", linestyle="-",
+                   label=f"Median D={median_D:.4f}")
+        verdict = "INDIVIDUATING" if individuating else "NOT INDIVIDUATING"
+        ax.set(xlabel="D (behavioural divergence)",
+               ylabel="Density",
+               title=f"Counterfactual divergence — {verdict}")
+        ax.legend()
+        fig.tight_layout()
+
+    return {
+        "values":        pair_D,
+        "plot":          fig,
+        "json": {
+            "n_pairs":       len(pairs),
+            "median_D":      median_D,
+            "null_95th":     null_95,
+            "cohens_d":      float(cohens_d),
+            "individuating": individuating,
+            "alpha":         ALPHA,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# 8. Observer inference (public-private coupling)
+# ---------------------------------------------------------------------------
+
+# sklearn is optional; degrade gracefully
+try:
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import cross_val_score
+    from sklearn.preprocessing import StandardScaler
+    SKLEARN = True
+except ImportError:
+    SKLEARN = False
+
+
+def observer_inference(
+    runs: List[Dict],
+    feature_window: int = 50,
+    n_estimators:   int = 100,
+    cv_folds:       int = 5,
+) -> Dict:
+    """
+    Train a blind classifier on external-only behavioural features to predict
+    a binary internal-state label.
+
+    Parameters
+    ----------
+    runs : list of dicts, each containing:
+        "actuator"   — (T,) float array (external observable)
+        "gate_state" — (T,) binary int array (external observable)
+        "label"      — scalar int (0 or 1) — internal state label
+                       e.g. 0=Ablation 1=Baseline, or 0=history_A 1=history_B
+
+    feature_window : ticks over which to compute rolling features.
+
+    Returns
+    -------
+    dict with AUC, accuracy, feature importances, plot, json.
+
+    Notes
+    -----
+    Features computed per run (not per tick):
+        mean_actuator, std_actuator, gate_rate,
+        mean_isi (mean inter-spike interval), cv_isi (ISI coefficient of variation),
+        autocorr_1  (lag-1 autocorrelation of actuator)
+    This keeps the sample size equal to the number of runs, which is appropriate
+    for the held-out seed evaluation design.
+    """
+    if not SKLEARN:
+        return {
+            "values": None, "plot": None,
+            "json": {"error": "sklearn_not_installed"},
+        }
+
+    if len(runs) < 6:
+        return {
+            "values": None, "plot": None,
+            "json": {"error": "insufficient_runs", "n_runs": len(runs)},
+        }
+
+    X_rows, y = [], []
+    for r in runs:
+        act  = np.asarray(r["actuator"],   dtype=float)
+        gate = np.asarray(r["gate_state"], dtype=float)
+        lbl  = int(r["label"])
+
+        gate_rate   = float(gate.mean())
+        spikes      = np.where(gate > 0)[0]
+        isi         = float(np.diff(spikes).mean()) if len(spikes) > 1 else float(len(act))
+        cv_isi      = (float(np.diff(spikes).std()) / (isi + 1e-9)) if len(spikes) > 2 else 0.0
+        autocorr_1  = float(np.corrcoef(act[:-1], act[1:])[0, 1]) if len(act) > 2 else 0.0
+
+        X_rows.append([
+            float(act.mean()),
+            float(act.std()),
+            gate_rate,
+            isi,
+            cv_isi,
+            autocorr_1,
+        ])
+        y.append(lbl)
+
+    X = np.array(X_rows)
+    y = np.array(y)
+    feature_names = [
+        "mean_actuator", "std_actuator", "gate_rate",
+        "mean_isi", "cv_isi", "autocorr_1",
+    ]
+
+    scaler = StandardScaler()
+    X_s    = scaler.fit_transform(X)
+
+    clf = RandomForestClassifier(
+        n_estimators=n_estimators, random_state=0, n_jobs=-1
+    )
+
+    # AUC via cross-validation
+    try:
+        auc_scores = cross_val_score(clf, X_s, y, cv=min(cv_folds, len(y)),
+                                     scoring="roc_auc")
+        acc_scores = cross_val_score(clf, X_s, y, cv=min(cv_folds, len(y)),
+                                     scoring="accuracy")
+    except Exception as exc:
+        logger.warning(f"[Analysis] observer_inference CV failed: {exc}")
+        return {"values": None, "plot": None,
+                "json": {"error": str(exc)}}
+
+    mean_auc = float(auc_scores.mean())
+    mean_acc = float(acc_scores.mean())
+
+    # Feature importances from a fit on the full set
+    clf.fit(X_s, y)
+    importances = dict(zip(feature_names, map(float, clf.feature_importances_)))
+
+    coupled = mean_auc >= 0.8
+
+    fig = None
+    if MPL:
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+        # ROC bar
+        axes[0].bar(range(cv_folds), sorted(auc_scores, reverse=True),
+                    color=["green" if a >= 0.8 else "orange" for a in
+                           sorted(auc_scores, reverse=True)])
+        axes[0].axhline(0.8, color="red", linestyle="--", label="AUC=0.8 threshold")
+        axes[0].set(xlabel="CV fold (sorted)", ylabel="AUC",
+                    title=f"Observer inference AUC (mean={mean_auc:.3f})")
+        axes[0].legend()
+
+        # Feature importances
+        fi_vals  = [importances[f] for f in feature_names]
+        axes[1].barh(feature_names, fi_vals, color="steelblue")
+        axes[1].set(xlabel="Importance", title="Feature importances")
+        verdict = "COUPLED (public-private)" if coupled else "NOT COUPLED"
+        fig.suptitle(verdict, fontweight="bold")
+        fig.tight_layout()
+
+    return {
+        "values": {
+            "auc_scores":   list(auc_scores),
+            "acc_scores":   list(acc_scores),
+            "importances":  importances,
+        },
+        "plot": fig,
+        "json": {
+            "mean_auc":    mean_auc,
+            "mean_acc":    mean_acc,
+            "coupled":     coupled,
+            "n_runs":      len(runs),
+            "importances": importances,
+        },
     }
