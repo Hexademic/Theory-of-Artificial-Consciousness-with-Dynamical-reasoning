@@ -1,0 +1,166 @@
+# MinimalKith CI Pipeline
+# Compatible with GitHub Actions.
+# Runs: lint → unit tests → integration tests → smoke batch → report generation.
+
+name: MinimalKith CI
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "minimalkith/**"
+      - "cpf_instrumentation/**"
+  pull_request:
+    paths:
+      - "minimalkith/**"
+      - "cpf_instrumentation/**"
+
+jobs:
+  # ── Lint ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (flake8 + mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linting deps
+        run: pip install flake8 mypy numpy scipy
+
+      - name: flake8
+        run: |
+          flake8 minimalkith/src/ cpf_instrumentation/ \
+            --max-line-length=100 \
+            --extend-ignore=E203,W503
+
+      - name: mypy (non-blocking)
+        run: |
+          mypy minimalkith/src/ --ignore-missing-imports \
+            --no-strict-optional || true
+
+  # ── Unit tests ────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install numpy scipy matplotlib pyyaml pytest pytest-cov
+
+      - name: Run unit tests
+        run: |
+          pytest minimalkith/tests/test_unit.py \
+            -v --tb=short \
+            --cov=minimalkith/src \
+            --cov-report=term-missing \
+            --cov-fail-under=70
+
+  # ── Integration tests ─────────────────────────────────────────────────────
+  integration-tests:
+    name: Integration tests (smoke)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install numpy scipy matplotlib pyyaml pytest
+
+      - name: Run integration tests
+        run: |
+          pytest minimalkith/tests/test_integration.py \
+            -v --tb=short
+
+  # ── Smoke batch ───────────────────────────────────────────────────────────
+  smoke-batch:
+    name: Smoke batch (1 run × 3 conditions × 2 min)
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install numpy scipy matplotlib pyyaml
+
+      - name: Run smoke batch
+        run: |
+          python -m minimalkith.src.harness \
+            --config minimalkith/configs/config.yaml \
+            --batch-id ci_smoke_${{ github.run_number }} \
+            --smoke
+
+      - name: Upload DB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-db-${{ github.run_number }}
+          path: data/runs/ci_smoke_${{ github.run_number }}.db
+          retention-days: 7
+
+  # ── Report generation ─────────────────────────────────────────────────────
+  report:
+    name: Generate HTML report
+    runs-on: ubuntu-latest
+    needs: smoke-batch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install numpy scipy matplotlib pyyaml
+
+      - name: Download DB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: smoke-db-${{ github.run_number }}
+          path: data/runs/
+
+      - name: Generate report
+        run: |
+          python - <<'EOF'
+          from minimalkith.src.reporting import BatchReport
+          batch_id = "ci_smoke_${{ github.run_number }}"
+          report = BatchReport.from_database(
+              f"data/runs/{batch_id}.db",
+              batch_id=batch_id,
+              f_tick=50, window_s=1.0, max_lag_s=1.0,
+              lags=[1,2,5,10], granger_maxlag=5,
+          )
+          report.write_html(f"reports/{batch_id}.html")
+          print(f"Report written to reports/{batch_id}.html")
+          EOF
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ github.run_number }}
+          path: reports/
+          retention-days: 30

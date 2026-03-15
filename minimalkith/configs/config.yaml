@@ -1,0 +1,29 @@
+# MinimalKith default configuration
+# All values match HarnessConfig defaults.
+# Override individual fields for custom runs.
+
+# ── Timing ────────────────────────────────────────────────────────────────
+f_tick: 50                  # sampling rate (Hz)
+run_duration_s: 600.0       # seconds per run (10 minutes)
+n_per_condition: 20         # runs per condition (Baseline / Pressure / Ablation)
+batch_seed: 0               # master RNG seed for deterministic reproduction
+
+# ── Environment ───────────────────────────────────────────────────────────
+noise_std: 0.10             # Gaussian noise standard deviation
+env_amplitude: 1.0          # base sine amplitude
+env_frequency: 0.5          # Hz
+
+# ── Pressure pulse (Pressure condition only) ──────────────────────────────
+pulse_amplitude: 2.0        # extra amplitude added during pulse
+pulse_start_s: 120.0        # pulse onset (seconds from run start)
+pulse_end_s: 180.0          # pulse offset
+
+# ── Organism ──────────────────────────────────────────────────────────────
+metabolic_capacity: 100.0   # maximum metabolic budget
+metabolic_replenish: 0.5    # budget units restored each tick
+ise_decay: 0.05             # ISE drive exponential decay rate per tick
+ise_threshold: 1.0          # ISE drive level that enables gate evaluation
+refractory_ticks: 5         # minimum ticks between gate fires
+
+# ── Persistence ───────────────────────────────────────────────────────────
+db_path: "data/runs/{batch_id}.db"   # {batch_id} is substituted at runtime
