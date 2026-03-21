@@ -1,0 +1,23 @@
+[package]
+name = "being32"
+version = "0.1.0"
+edition = "2021"
+description = "Being32 v2 — 128-byte Hex32 organism kernel with reservoir computing, symbolic pruning gate, and social field dynamics"
+license = "MIT"
+repository = "https://github.com/Hexademic/being32"
+
+[lib]
+name = "being32"
+path = "src/lib.rs"
+
+[[bin]]
+name = "being32_demo"
+path = "src/main.rs"
+
+[dependencies]
+nalgebra = "0.32"
+rand = "0.8"
+rand_distr = "0.4"
+
+[dev-dependencies]
+approx = "0.5"
