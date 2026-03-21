@@ -397,6 +397,32 @@ impl Being32 {
         self.set_int_osc(osc.clamp(-1.0, 1.0));
     }
 
+    // Social metabolism — update the dyad for `other_id` from a shared field snapshot.
+    //
+    // Call once per tick per directed pair (A→B, B→A) after `receive_social_field`.
+    // This is where ephemeral affect contagion solidifies into lasting memory.
+    pub fn update_dyad_from_interaction(&mut self, other_id: u32, field: &SocialField) {
+        let self_val = self.aff_valence();
+        let mismatch = (self_val - field.avg_valence).abs(); // [0, 2]
+
+        // Affinity drifts toward valence alignment.
+        let valence_alignment = 1.0 - mismatch.min(1.0); // [0, 1]
+        let dyad = self.rel_state.ensure_dyad(other_id);
+        dyad.affinity += 0.05 * (valence_alignment - dyad.affinity);
+        dyad.affinity = dyad.affinity.clamp(-1.0, 1.0);
+
+        // Trust rises in low-density, low-mismatch encounters.
+        let crowd_penalty = field.density.min(1.0); // saturates at density ≥ 1
+        let trust_target = (1.0 - mismatch.min(1.0)) * (1.0 - crowd_penalty);
+        dyad.trust += 0.02 * (trust_target - dyad.trust);
+        dyad.trust = dyad.trust.clamp(0.0, 1.0);
+
+        // Relational curvature bends negative under persistent mismatch.
+        let curv_target = -(mismatch.min(1.0));
+        let new_curv = self.rel_curvature() + 0.05 * (curv_target - self.rel_curvature());
+        self.set_rel_curvature(new_curv);
+    }
+
     // v2.0-R + v2.1-H perceptual radius (used by World)
     pub fn perceptual_radius(&self) -> f32 {
         let base = 1.0;
